@@ -1,0 +1,45 @@
+# Custom Supabase values for AKS + external Azure services
+
+global:
+  postgresql:
+    enabled: false # Use external Azure PostgreSQL Flexible Server
+  storage:
+    enabled: false # Use Azure Blob Storage
+
+postgrest:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 512Mi
+
+realtime:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 512Mi
+
+kong:
+  ingress:
+    enabled: true
+    className: azure-application-gateway
+    tls:
+      enabled: true
+      secretName: supabase-tls

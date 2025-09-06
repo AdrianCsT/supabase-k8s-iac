@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: supabase-ingress
+  namespace: supabase
+  annotations:
+    kubernetes.io/ingress.class: azure-application-gateway
+spec:
+  tls:
+  - hosts:
+    - <your-fqdn>
+    secretName: supabase-tls
+  rules:
+  - host: <your-fqdn>
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kong-proxy
+            port:
+              number: 80

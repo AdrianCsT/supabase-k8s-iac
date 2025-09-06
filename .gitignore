@@ -1,0 +1,22 @@
+# Terraform / CDKTF
+.terraform/
+terraform.tfstate*
+.terraform.lock.hcl
+cdktf.out/
+.cdk.out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# Helm
+charts/
+*.tgz
+
+# Kubeconfig and local
+kubeconfig
+.DS_Store
+Thumbs.db
