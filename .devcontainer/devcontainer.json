@@ -1,0 +1,58 @@
+{
+  "name": "Azure CDKTF Development",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "runArgs": [
+    "--platform=linux/amd64"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-azureterraform",
+        "ms-vscode.azurecli",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-python.python",
+        "redhat.vscode-yaml",
+        "hashicorp.terraform",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "terraform.languageServer.enable": true,
+        "terraform.languageServer.args": ["serve"],
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "prettier",
+        "python.defaultInterpreterPath": "/usr/bin/python3.11",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true
+      }
+    }
+  },
+  "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "kubectl": "latest",
+      "helm": "latest"
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+  },
+  "postCreateCommand": "./.devcontainer/dev-setup.sh",
+  "remoteEnv": {
+    "ARM_CLIENT_ID": "${localEnv:ARM_CLIENT_ID}",
+    "ARM_CLIENT_SECRET": "${localEnv:ARM_CLIENT_SECRET}",
+    "ARM_SUBSCRIPTION_ID": "${localEnv:ARM_SUBSCRIPTION_ID}",
+    "ARM_TENANT_ID": "${localEnv:ARM_TENANT_ID}",
+    "TFVARS_FILE": "${localEnv:TFVARS_FILE}",
+    "PG_ADMIN_LOGIN": "${localEnv:PG_ADMIN_LOGIN}",
+    "PG_ADMIN_PASSWORD": "${localEnv:PG_ADMIN_PASSWORD}"
+  }
+}

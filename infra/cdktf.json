@@ -1,0 +1,10 @@
+{
+  "language": "python",
+  "app": "python main.py",
+  "terraformProviders": [
+    "hashicorp/azurerm@~> 4.43.0"
+  ],
+  "terraformModules": [],
+  "codeMakerOutput": "cdktf.out",
+  "projectId": "2c9b40b5-7d54-4b55-8d3f-4a1a1fbead71"
+}

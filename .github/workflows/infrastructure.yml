@@ -1,0 +1,140 @@
+name: Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev or prod)"
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    name: CDKTF Synth + Deploy
+    runs-on: windows-latest
+    env:
+      # AzureRM provider via OIDC
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Postgres admin credentials for Flexible Server
+      PG_ADMIN_LOGIN: ${{ secrets.PG_ADMIN_LOGIN }}
+      PG_ADMIN_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+      # Select tfvars file based on input
+      TFVARS_FILE: ${{ github.event.inputs.environment == 'prod' && 'vars/prod.tfvars' || 'vars/dev.tfvars' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Helm (Windows)
+        shell: pwsh
+        run: |
+          iwr https://get.helm.sh/helm-v3.15.4-windows-amd64.zip -OutFile helm.zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory("helm.zip", "$env:RUNNER_TEMP")
+          Copy-Item "$env:RUNNER_TEMP\windows-amd64\helm.exe" "$env:RUNNER_TOOL_CACHE" -Force
+          echo "$env:RUNNER_TOOL_CACHE" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install CDKTF CLI
+        shell: pwsh
+        run: |
+          npm install -g cdktf-cli@latest
+          cdktf --version
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          pip install --upgrade pip
+          pip install -r infra/requirements.txt
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Emit deployment config JSON
+        shell: pwsh
+        working-directory: infra
+        run: |
+          $py = @'
+          import json, pathlib
+          from utils.config_loader import load_tfvars_config
+          from stacks.azure_stack import synth_config_json
+          repo = pathlib.Path('.').resolve().parents[0]  # repo root
+          cfg = load_tfvars_config(repo_root=repo)
+          out = synth_config_json(cfg)
+          pathlib.Path('deployment-config.json').write_text(json.dumps(out, indent=2), encoding='utf-8')
+          print('Wrote deployment-config.json')
+          '@
+          python - <<PY
+          $py
+          PY
+
+      - name: CDKTF Synth
+        shell: pwsh
+        working-directory: infra
+        run: |
+          cdktf synth
+
+      - name: CDKTF Deploy
+        shell: pwsh
+        working-directory: infra
+        run: |
+          cdktf deploy --auto-approve
+
+      - name: Upload deployment outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdktf-out-${{ github.run_id }}
+          path: |
+            infra/cdktf.out
+            infra/deployment-config.json
+          if-no-files-found: warn
+
+      - name: Deploy Supabase Application
+        if: success()
+        shell: pwsh
+        run: |
+          Write-Host "Deploying Supabase application to AKS..."
+          $cfg = Get-Content -Path infra/deployment-config.json -Raw | ConvertFrom-Json
+          $RG = $cfg.resource_group_name
+          $AKS = $cfg.aks_config.cluster_name
+          $KV = $cfg.key_vault_config.vault_name
+          python -m scripts_py.cli aks-configure --resource-group "$RG" --cluster-name "$AKS" --namespace supabase
+          $SA = az storage account list -g "$RG" --query "[0].name" -o tsv
+          $KEY = az storage account keys list -n "$SA" -g "$RG" --query "[0].value" -o tsv
+          New-Item -ItemType Directory -Path config -Force | Out-Null
+          $json = @"{
+            ""azure-storage-account-name"": ""$SA"",
+            ""azure-storage-account-key"": ""$KEY"",
+            ""supabase-storage-creds"": ""{\"keyId\":\"access\",\"accessKey\":\"secret\"}""
+          }"@
+          Set-Content -Path config/secrets.ci.json -Value $json -Encoding UTF8
+          python -m scripts_py.cli secrets-sync --key-vault "$KV" --resource-group "$RG" --cluster-name "$AKS" --secrets-file config/secrets.ci.json
+          python -m scripts_py.cli deploy --resource-group "$RG" --cluster-name "$AKS" --namespace supabase --key-vault "$KV" --values-file ./helm/values/supabase-aks-values.yaml --release supabase
+
+      - name: Run Smoke Test
+        if: success()
+        shell: pwsh
+        run: |
+          $cfg = Get-Content -Path infra/deployment-config.json -Raw | ConvertFrom-Json
+          $RG = $cfg.resource_group_name
+          $AKS = $cfg.aks_config.cluster_name
+          python -m scripts_py.cli smoke-test --resource-group "$RG" --cluster-name "$AKS" --internal

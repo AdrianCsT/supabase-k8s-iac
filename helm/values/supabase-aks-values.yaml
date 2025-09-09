@@ -1,12 +1,33 @@
 # Custom Supabase values for AKS + external Azure services
 
-global:
-  postgresql:
-    enabled: false # Use external Azure PostgreSQL Flexible Server
-  storage:
-    enabled: false # Use Azure Blob Storage
+# 1) External PostgreSQL: disable in-cluster DB
+db:
+  enabled: false
 
-postgrest:
+# 2) JWT secrets via existing secret created by External Secrets Operator (supabase-env)
+secret:
+  jwt:
+    secretRef: supabase-env
+    secretRefKey:
+      anonKey: ANON_KEY
+      serviceKey: SERVICE_ROLE_KEY
+      secret: JWT_SECRET
+  # S3 credentials for storage (provided by ExternalSecrets -> supabase-storage-secret)
+  s3:
+    secretRef: supabase-storage-secret
+    secretRefKey:
+      keyId: keyId
+      accessKey: accessKey
+  # Database credentials come from a dedicated K8s Secret created by ESO
+  # Ensure ExternalSecret 'supabase-db' provides keys: username, password, database
+  db:
+    secretRef: supabase-db
+    secretRefKey:
+      username: username
+      password: password
+      database: database
+
+rest:
   replicaCount: 2
   autoscaling:
     enabled: true
@@ -39,7 +60,34 @@ realtime:
 kong:
   ingress:
     enabled: true
-    className: azure-application-gateway
+    className: nginx
+    hosts:
+    - host: supabase.local
+      paths:
+      - path: /
+        pathType: Prefix
     tls:
-      enabled: true
-      secretName: supabase-tls
+    - secretName: supabase-tls
+      hosts:
+      - supabase.local
+
+auth:
+  # Provide external Postgres host (Azure Database for PostgreSQL)
+  # Example: mypg.postgres.database.azure.com
+  environment:
+    DB_HOST: "supabase-dev-pg.postgres.database.azure.com"
+    DB_DRIVER: postgres
+    DB_SSL: require
+    DB_PORT: 5432
+
+# Storage service (optional) - configure S3 creds via ExternalSecret if needed
+storage:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources: {}
+  environment:
+    STORAGE_BACKEND: s3
+    GLOBAL_S3_ENDPOINT: http://s3proxy.supabase.svc.cluster.local:9000
+    STORAGE_S3_FORCE_PATH_STYLE: "true"

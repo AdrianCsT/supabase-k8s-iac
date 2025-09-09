@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'infra/**'
+      - 'k8s/**'
+      - 'helm/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CDKTF CLI
+        run: npm i -g cdktf-cli
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install constructs cdktf jsii typeguard cdktf-cdktf-provider-azurerm
+
+      - name: CDKTF synth
+        working-directory: infra
+        run: |
+          cdktf get
+          cdktf synth
+
+      - name: Terraform validate synthesized stack
+        working-directory: infra/cdktf.out/stacks/azure-supabase
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+

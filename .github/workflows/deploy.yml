@@ -1,0 +1,121 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'infra/**'
+      - 'k8s/**'
+      - 'helm/**'
+      - 'scripts/**'
+
+permissions:
+  id-token: write   # for OIDC azure/login
+  contents: read
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PG_ADMIN_LOGIN: ${{ secrets.PG_ADMIN_LOGIN }}
+      PG_ADMIN_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+      TFVARS_FILE: vars/dev.tfvars
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CDKTF CLI
+        run: npm i -g cdktf-cli
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install constructs cdktf jsii typeguard cdktf-cdktf-provider-azurerm
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Deploy infra (CDKTF)
+        run: |
+          python -m scripts_py.cli infra-deploy --project-dir infra
+
+      - name: Emit deployment config JSON
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          from infra.utils.config_loader import load_tfvars_config
+          from infra.stacks.azure_stack import synth_config_json
+          repo = pathlib.Path('.').resolve()
+          cfg = load_tfvars_config(repo_root=repo)
+          out = synth_config_json(cfg)
+          pathlib.Path('infra/deployment-config.json').write_text(json.dumps(out, indent=2), encoding='utf-8')
+          print('Wrote infra/deployment-config.json')
+          PY
+
+      - name: Export AKS variables
+        id: envout
+        run: |
+          RG=$(jq -r .resource_group_name infra/deployment-config.json)
+          AKS=$(jq -r .aks_config.cluster_name infra/deployment-config.json)
+          echo "RG=$RG" >> $GITHUB_OUTPUT
+          echo "AKS=$AKS" >> $GITHUB_OUTPUT
+
+      - name: Configure AKS baseline (ESO, NGINX, HPAs, NetworkPolicy)
+        run: |
+          python -m scripts_py.cli aks-configure --resource-group "${{ steps.envout.outputs.RG }}" --cluster-name "${{ steps.envout.outputs.AKS }}" --namespace supabase
+
+      - name: Build CI secrets file from Azure Storage
+        run: |
+          RG='${{ steps.envout.outputs.RG }}'
+          AKS='${{ steps.envout.outputs.AKS }}'
+          SA=$(az storage account list -g "$RG" --query "[0].name" -o tsv)
+          KEY=$(az storage account keys list -n "$SA" -g "$RG" --query "[0].value" -o tsv)
+          mkdir -p config
+          cat > config/secrets.ci.json <<JSON
+          {
+            "azure-storage-account-name": "$SA",
+            "azure-storage-account-key": "$KEY",
+            "supabase-storage-creds": "{\"keyId\":\"access\",\"accessKey\":\"secret\"}"
+          }
+          JSON
+
+      - name: Sync Key Vault secrets
+        run: |
+          KV=$(jq -r .key_vault_config.vault_name infra/deployment-config.json)
+          python -m scripts_py.cli secrets-sync --key-vault "$KV" --resource-group "${{ steps.envout.outputs.RG }}" --cluster-name "${{ steps.envout.outputs.AKS }}" --secrets-file config/secrets.ci.json
+
+      - name: Deploy Supabase (Helm server-side)
+        run: |
+          KV=$(jq -r .key_vault_config.vault_name infra/deployment-config.json)
+          python -m scripts_py.cli deploy --resource-group "${{ steps.envout.outputs.RG }}" --cluster-name "${{ steps.envout.outputs.AKS }}" --namespace supabase --key-vault "$KV" --values-file ./helm/values/supabase-aks-values.yaml --release supabase
+
+      - name: Smoke test (Internal)
+        run: |
+          python -m scripts_py.cli smoke-test --resource-group "${{ steps.envout.outputs.RG }}" --cluster-name "${{ steps.envout.outputs.AKS }}" --internal

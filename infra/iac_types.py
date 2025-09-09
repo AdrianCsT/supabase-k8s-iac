@@ -73,6 +73,11 @@ class BlobStorageConfig:
     container_name: str
     access_tier: str  # Hot/Cool/Archive
     replication_type: str  # LRS/ZRS/GRS
+    performance_tier: str = "Standard_LRS"
+    enable_versioning: bool = True
+    enable_soft_delete: bool = True
+    soft_delete_days: int = 7
+    enable_static_website: bool = False
 
 
 @dataclass(frozen=True)
